@@ -101,10 +101,11 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   }
 
   async function encerrarBloco(id: string) {
-    await supabase
+    const { error } = await supabase
       .from('registros')
       .update({ fim: new Date().toISOString() })
       .eq('id', id)
+    if (error) throw new Error(`Erro ao encerrar bloco: ${error.message}`)
   }
 
   async function salvarRegistro(e: React.FormEvent) {
@@ -160,28 +161,59 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
 
   async function encerrarAtual() {
     if (!blocoAtivo) return
-    await encerrarBloco(blocoAtivo.id)
-    await carregarRegistros()
+    try {
+      await encerrarBloco(blocoAtivo.id)
+      await carregarRegistros()
+    } catch (err: unknown) {
+      setErro(err instanceof Error ? err.message : 'Erro ao encerrar atividade.')
+    }
+  }
+
+  async function fimDoExpediente() {
+    if (!blocoAtivo) {
+      // Nenhum bloco ativo: apenas confirma visualmente (sem silêncio)
+      setErro('')
+      alert('Nenhuma atividade em andamento. Expediente já está encerrado.')
+      return
+    }
+    try {
+      await encerrarBloco(blocoAtivo.id)
+      await carregarRegistros()
+    } catch (err: unknown) {
+      setErro(err instanceof Error ? err.message : 'Erro ao encerrar expediente.')
+    }
   }
 
   async function encerrarEIniciarProxima() {
-    if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
-    await carregarRegistros()
-    abrirModalNovo()
+    try {
+      if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
+      await carregarRegistros()
+      abrirModalNovo()
+    } catch (err: unknown) {
+      setErro(err instanceof Error ? err.message : 'Erro ao encerrar atividade.')
+    }
   }
 
   async function atalhoRapido(descricao: string, categoriaId?: string) {
-    if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
     const catId = categoriaId ?? categorias.find(c => c.nome.includes('Pausa'))?.id ?? categorias[0]?.id
-    if (!catId) return
-    await supabase.from('registros').insert({
-      user_id: profile.id,
-      categoria_id: catId,
-      descricao,
-      area_id: profile.area_id,
-      inicio: new Date().toISOString(),
-    })
-    await carregarRegistros()
+    if (!catId) {
+      setErro('Nenhuma categoria disponível. Cadastre ao menos uma categoria.')
+      return
+    }
+    try {
+      if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
+      const { error } = await supabase.from('registros').insert({
+        user_id: profile.id,
+        categoria_id: catId,
+        descricao,
+        area_id: profile.area_id,
+        inicio: new Date().toISOString(),
+      })
+      if (error) throw new Error(error.message)
+      await carregarRegistros()
+    } catch (err: unknown) {
+      setErro(err instanceof Error ? err.message : 'Erro ao registrar atalho.')
+    }
   }
 
   const totalSegundos = registrosHoje.reduce((acc, r) => acc + calcularDuracao(r.inicio, r.fim), 0)
@@ -276,10 +308,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
             Almoço
           </button>
           <button
-            onClick={async () => {
-              if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
-              await carregarRegistros()
-            }}
+            onClick={fimDoExpediente}
             className="flex-1 min-w-[calc(50%-0.25rem)] bg-white border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors text-center"
           >
             Fim do expediente
