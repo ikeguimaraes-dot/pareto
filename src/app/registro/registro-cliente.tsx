@@ -35,6 +35,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   const [modalEditar, setModalEditar] = useState<RegistroComRelacoes | null>(null)
   const [carregando, setCarregando] = useState(false)
   const [erro, setErro] = useState('')
+  const [confirmacaoFim, setConfirmacaoFim] = useState('')
 
   // Form do modal
   const [formCategoria, setFormCategoria] = useState('')
@@ -170,15 +171,57 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   }
 
   async function fimDoExpediente() {
-    if (!blocoAtivo) {
-      // Nenhum bloco ativo: apenas confirma visualmente (sem silêncio)
-      setErro('')
-      alert('Nenhuma atividade em andamento. Expediente já está encerrado.')
+    setErro('')
+    setConfirmacaoFim('')
+
+    const catId = categorias.find(c => c.nome.toLowerCase().includes('pausa'))?.id ?? categorias[0]?.id
+    if (!catId) {
+      setErro('Nenhuma categoria disponível. Cadastre ao menos uma categoria.')
       return
     }
+
     try {
-      await encerrarBloco(blocoAtivo.id)
+      // Passo 1: fechar bloco ativo se existir
+      if (blocoAtivo) {
+        await encerrarBloco(blocoAtivo.id)
+      }
+
+      // Passo 2: verificar se o último registro do dia já é o marcador de fim
+      // (deduplicação — regra 4)
+      const agora = new Date()
+      const inicioHoje = startOfDay(agora).toISOString()
+      const fimHoje = endOfDay(agora).toISOString()
+      const { data: registrosDia } = await supabase
+        .from('registros')
+        .select('descricao, fim')
+        .eq('user_id', profile.id)
+        .gte('inicio', inicioHoje)
+        .lte('inicio', fimHoje)
+        .order('inicio', { ascending: false })
+        .limit(1)
+
+      const ultimoRegistro = registrosDia?.[0]
+      const jaTemMarcador =
+        !blocoAtivo &&
+        ultimoRegistro?.descricao === 'Fim do expediente' &&
+        ultimoRegistro?.fim !== null
+
+      if (!jaTemMarcador) {
+        // Passo 3: criar marcador de fim (inicio = fim = agora, duração zero)
+        const agoraIso = agora.toISOString()
+        const { error } = await supabase.from('registros').insert({
+          user_id: profile.id,
+          categoria_id: catId,
+          descricao: 'Fim do expediente',
+          area_id: profile.area_id,
+          inicio: agoraIso,
+          fim: agoraIso,
+        })
+        if (error) throw new Error(error.message)
+      }
+
       await carregarRegistros()
+      setConfirmacaoFim(`Expediente encerrado às ${format(agora, 'HH:mm')}`)
     } catch (err: unknown) {
       setErro(err instanceof Error ? err.message : 'Erro ao encerrar expediente.')
     }
@@ -320,6 +363,17 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
             + Novo bloco
           </button>
         </div>
+
+        {/* Confirmação de fim de expediente */}
+        {confirmacaoFim && (
+          <div className="bg-green-50 border border-green-200 rounded-2xl px-5 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-green-700">
+              <span className="text-lg">✓</span>
+              <span className="text-sm font-medium">{confirmacaoFim}</span>
+            </div>
+            <button onClick={() => setConfirmacaoFim('')} className="text-green-400 hover:text-green-600 text-lg leading-none">&times;</button>
+          </div>
+        )}
 
         {/* Linha do tempo do dia */}
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
