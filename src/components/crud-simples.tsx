@@ -19,12 +19,58 @@ interface Item {
   [key: string]: unknown
 }
 
+// renderType substitui render functions (que não podem cruzar boundary Server→Client)
+type RenderType =
+  | 'status'      // boolean → badge "Ativo/Inativo" ou "Ativa/Inativa"
+  | 'status-f'    // boolean → badge feminino "Ativa/Inativa"
+  | 'color-dot'   // string → bolinha colorida inline
+  | 'color-label' // string (nome) + item.cor → bolinha + texto
+
+interface Coluna {
+  key: string
+  label: string
+  renderType?: RenderType
+  colorKey?: string  // qual chave do item contém a cor (para color-label)
+}
+
 interface Props {
   titulo: string
   tabela: string
   itens: Item[]
   campos: Campo[]
-  colunas: { key: string; label: string; render?: (v: unknown, item: Item) => React.ReactNode }[]
+  colunas: Coluna[]
+}
+
+function renderCelula(col: Coluna, item: Item) {
+  const v = item[col.key]
+
+  switch (col.renderType) {
+    case 'status':
+    case 'status-f': {
+      const ativo = Boolean(v)
+      const [sim, nao] = col.renderType === 'status-f' ? ['Ativa', 'Inativa'] : ['Ativo', 'Inativo']
+      return (
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${ativo ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+          {ativo ? sim : nao}
+        </span>
+      )
+    }
+    case 'color-dot':
+      return (
+        <span className="w-5 h-5 rounded-full inline-block border border-gray-200" style={{ backgroundColor: String(v ?? '#6B7280') }} />
+      )
+    case 'color-label': {
+      const cor = col.colorKey ? String(item[col.colorKey] ?? '#6B7280') : '#6B7280'
+      return (
+        <div className="flex items-center gap-2">
+          <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: cor }} />
+          <span className="font-medium text-sm text-gray-900">{String(v ?? '—')}</span>
+        </div>
+      )
+    }
+    default:
+      return <span className="text-sm text-gray-800">{String(v ?? '—')}</span>
+  }
 }
 
 export default function CrudSimples({ titulo, tabela, itens, campos, colunas }: Props) {
@@ -39,11 +85,7 @@ export default function CrudSimples({ titulo, tabela, itens, campos, colunas }: 
   function initForm(item?: Item) {
     const init: Record<string, string | number> = {}
     campos.forEach(c => {
-      if (item) {
-        init[c.key] = item[c.key] as string | number ?? c.defaultValue ?? ''
-      } else {
-        init[c.key] = c.defaultValue ?? ''
-      }
+      init[c.key] = item ? (item[c.key] as string | number ?? c.defaultValue ?? '') : (c.defaultValue ?? '')
     })
     return init
   }
@@ -111,8 +153,8 @@ export default function CrudSimples({ titulo, tabela, itens, campos, colunas }: 
             {itens.map(item => (
               <tr key={item.id} className="hover:bg-gray-50">
                 {colunas.map(col => (
-                  <td key={col.key} className="px-5 py-3 text-sm text-gray-800">
-                    {col.render ? col.render(item[col.key], item) : String(item[col.key] ?? '—')}
+                  <td key={col.key} className="px-5 py-3">
+                    {renderCelula(col, item)}
                   </td>
                 ))}
                 <td className="px-5 py-3 text-right">

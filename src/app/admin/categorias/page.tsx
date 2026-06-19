@@ -15,16 +15,8 @@ export default async function CategoriasPage() {
         { key: 'cor', label: 'Cor', type: 'color', defaultValue: '#6B7280' },
       ]}
       colunas={[
-        {
-          key: 'nome', label: 'Nome',
-          render: (v, item) => (
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full" style={{ backgroundColor: String(item.cor ?? '#6B7280') }} />
-              <span className="font-medium text-sm">{String(v)}</span>
-            </div>
-          )
-        },
-        { key: 'cor', label: 'Cor' },
+        { key: 'nome', label: 'Nome', renderType: 'color-label', colorKey: 'cor' },
+        { key: 'cor', label: 'Cor', renderType: 'color-dot' },
       ]}
     />
   )
