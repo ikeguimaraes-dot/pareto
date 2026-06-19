@@ -1,0 +1,88 @@
+export type Role = 'admin' | 'colaborador'
+
+export interface Profile {
+  id: string
+  nome: string
+  email: string
+  role: Role
+  area_id: string | null
+  horas_dia_contratadas: number
+  ativo: boolean
+  created_at: string
+}
+
+export interface Area {
+  id: string
+  nome: string
+  ativo: boolean
+  created_at: string
+}
+
+export interface Projeto {
+  id: string
+  nome: string
+  area_id: string | null
+  descricao: string | null
+  ativo: boolean
+  created_at: string
+}
+
+export interface CategoriaAtividade {
+  id: string
+  nome: string
+  cor: string
+}
+
+export interface Registro {
+  id: string
+  user_id: string
+  area_id: string | null
+  categoria_id: string
+  projeto_id: string | null
+  descricao: string
+  participantes: string | null
+  inicio: string
+  fim: string | null
+  entrega_concluida: boolean | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RegistroComRelacoes extends Registro {
+  profiles?: Profile
+  areas?: Area
+  categorias_atividade?: CategoriaAtividade
+  projetos?: Projeto
+}
+
+export type Database = {
+  public: {
+    Tables: {
+      profiles: {
+        Row: Profile
+        Insert: Omit<Profile, 'created_at'>
+        Update: Partial<Omit<Profile, 'id' | 'created_at'>>
+      }
+      areas: {
+        Row: Area
+        Insert: Omit<Area, 'id' | 'created_at'>
+        Update: Partial<Omit<Area, 'id' | 'created_at'>>
+      }
+      projetos: {
+        Row: Projeto
+        Insert: Omit<Projeto, 'id' | 'created_at'>
+        Update: Partial<Omit<Projeto, 'id' | 'created_at'>>
+      }
+      categorias_atividade: {
+        Row: CategoriaAtividade
+        Insert: Omit<CategoriaAtividade, 'id'>
+        Update: Partial<Omit<CategoriaAtividade, 'id'>>
+      }
+      registros: {
+        Row: Registro
+        Insert: Omit<Registro, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<Registro, 'id' | 'created_at'>>
+      }
+    }
+  }
+}
