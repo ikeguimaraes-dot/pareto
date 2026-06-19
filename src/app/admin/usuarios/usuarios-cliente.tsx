@@ -14,8 +14,18 @@ interface Props {
 }
 
 const CAMPOS_VAZIOS = {
-  nome: '', email: '', senha: '', role: 'colaborador' as 'admin' | 'colaborador',
+  nome: '', sobrenome: '', email: '', senha: '', role: 'colaborador' as 'admin' | 'colaborador',
   area_id: '', horas_dia_contratadas: 8,
+  data_nascimento: '', cargo: '', descricao_cargo: '',
+}
+
+function calcularIdade(dataNascimento: string): number {
+  const hoje = new Date()
+  const nasc = new Date(dataNascimento + 'T00:00:00')
+  let idade = hoje.getFullYear() - nasc.getFullYear()
+  const m = hoje.getMonth() - nasc.getMonth()
+  if (m < 0 || (m === 0 && hoje.getDate() < nasc.getDate())) idade--
+  return idade
 }
 
 export default function UsuariosCliente({ usuarios, areas }: Props) {
@@ -39,11 +49,15 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
     setEditando(u)
     setForm({
       nome: u.nome,
+      sobrenome: u.sobrenome ?? '',
       email: u.email,
       senha: '',
       role: u.role,
       area_id: u.area_id ?? '',
       horas_dia_contratadas: u.horas_dia_contratadas,
+      data_nascimento: u.data_nascimento ?? '',
+      cargo: u.cargo ?? '',
+      descricao_cargo: u.descricao_cargo ?? '',
     })
     setNovaSenha('')
     setErro('')
@@ -58,10 +72,14 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
     try {
       if (editando) {
         const body: Record<string, unknown> = {
-          nome: form.nome,
+          nome: form.nome.trim(),
+          sobrenome: form.sobrenome.trim() || null,
           role: form.role,
           area_id: form.area_id || null,
           horas_dia_contratadas: form.horas_dia_contratadas,
+          data_nascimento: form.data_nascimento || null,
+          cargo: form.cargo.trim() || null,
+          descricao_cargo: form.descricao_cargo.trim() || null,
           ativo: editando.ativo,
         }
         if (novaSenha) body.nova_senha = novaSenha
@@ -125,6 +143,7 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
               <tr className="border-b border-gray-100 text-xs font-medium text-gray-500 uppercase tracking-wide">
                 <th className="text-left px-5 py-3">Nome</th>
                 <th className="text-left px-5 py-3 hidden sm:table-cell">E-mail</th>
+                <th className="text-left px-5 py-3 hidden lg:table-cell">Cargo</th>
                 <th className="text-left px-5 py-3 hidden md:table-cell">Área</th>
                 <th className="text-left px-5 py-3">Papel</th>
                 <th className="text-left px-5 py-3">Status</th>
@@ -135,10 +154,20 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
               {usuarios.map(u => (
                 <tr key={u.id} className="hover:bg-gray-50">
                   <td className="px-5 py-3">
-                    <div className="font-medium text-gray-900 text-sm">{u.nome}</div>
+                    <div className="font-medium text-gray-900 text-sm">
+                      {u.nome}{u.sobrenome ? ` ${u.sobrenome}` : ''}
+                      {u.data_nascimento && (
+                        <span className="ml-1.5 text-xs font-normal text-gray-400">
+                          {calcularIdade(u.data_nascimento)} anos
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-400 sm:hidden">{u.email}</div>
                   </td>
                   <td className="px-5 py-3 hidden sm:table-cell text-sm text-gray-600">{u.email}</td>
+                  <td className="px-5 py-3 hidden lg:table-cell text-sm text-gray-600">
+                    {u.cargo ?? '—'}
+                  </td>
                   <td className="px-5 py-3 hidden md:table-cell text-sm text-gray-600">
                     {u.areas ? (u.areas as { nome: string }).nome : '—'}
                   </td>
@@ -181,12 +210,21 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
             </div>
 
             <form onSubmit={salvar} className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome *</label>
-                <input
-                  type="text" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })}
-                  required className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Nome *</label>
+                  <input
+                    type="text" value={form.nome} onChange={e => setForm({ ...form, nome: e.target.value })}
+                    required className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Sobrenome</label>
+                  <input
+                    type="text" value={form.sobrenome} onChange={e => setForm({ ...form, sobrenome: e.target.value })}
+                    className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
 
               <div>
@@ -239,6 +277,39 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
                     className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Data de nascimento
+                  {form.data_nascimento && (
+                    <span className="ml-2 text-xs font-normal text-gray-400">
+                      {calcularIdade(form.data_nascimento)} anos
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="date" value={form.data_nascimento} onChange={e => setForm({ ...form, data_nascimento: e.target.value })}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Cargo</label>
+                <input
+                  type="text" value={form.cargo} onChange={e => setForm({ ...form, cargo: e.target.value })}
+                  placeholder="Ex: Gerente de Projetos"
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Descrição do cargo</label>
+                <textarea
+                  value={form.descricao_cargo} onChange={e => setForm({ ...form, descricao_cargo: e.target.value })}
+                  rows={2} placeholder="Responsabilidades principais..."
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                />
               </div>
 
               <div>

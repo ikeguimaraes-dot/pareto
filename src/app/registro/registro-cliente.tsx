@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { format, differenceInSeconds, parseISO, startOfDay, endOfDay } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
@@ -282,12 +283,33 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
             </span>
           )}
         </div>
-        <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
-          Sair
-        </button>
+        <div className="flex items-center gap-3">
+          <Link href="/perfil" className="text-sm text-indigo-500 hover:text-indigo-700 transition-colors font-medium">
+            Meu perfil
+          </Link>
+          <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
+            Sair
+          </button>
+        </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+        {/* Nudge: perfil incompleto */}
+        {(!profile.cargo || !profile.sobrenome || !profile.data_nascimento) && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-amber-700 min-w-0">
+              <span className="flex-shrink-0 text-base">!</span>
+              <span className="text-sm">Complete seu perfil para que a equipe possa te conhecer melhor.</span>
+            </div>
+            <Link
+              href="/perfil"
+              className="flex-shrink-0 text-sm font-medium text-amber-700 hover:text-amber-900 underline transition-colors"
+            >
+              Completar
+            </Link>
+          </div>
+        )}
+
         {/* Bloco ativo */}
         {blocoAtivo ? (
           <div className="bg-indigo-600 text-white rounded-2xl p-5 shadow-md">

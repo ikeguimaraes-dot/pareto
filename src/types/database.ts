@@ -3,11 +3,15 @@ export type Role = 'admin' | 'colaborador'
 export interface Profile {
   id: string
   nome: string
+  sobrenome: string | null
   email: string
   role: Role
   area_id: string | null
   horas_dia_contratadas: number
   ativo: boolean
+  data_nascimento: string | null   // date ISO: 'YYYY-MM-DD'
+  cargo: string | null
+  descricao_cargo: string | null
   created_at: string
 }
 
