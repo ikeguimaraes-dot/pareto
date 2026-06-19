@@ -1,11 +1,20 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { format, differenceInSeconds, parseISO, startOfDay, endOfDay } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
-import type { Profile, CategoriaAtividade, Projeto, Area, Registro, RegistroComRelacoes } from '@/types/database'
+import type { Profile, CategoriaAtividade, Projeto, Area, RegistroComRelacoes } from '@/types/database'
+import {
+  calcularEstatisticas,
+  ultimosDiasUteis,
+  MOEDAS_BASE,
+  MOEDAS_BONUS_DIA,
+  MOEDAS_BONUS_MAX,
+  META_PCT,
+  NIVEIS,
+} from '@/lib/gamificacao'
 
 interface Props {
   profile: Profile & { areas?: { nome: string } | null }
@@ -14,11 +23,33 @@ interface Props {
   areas: Area[]
 }
 
+// Aviso de bloco rodando há muito tempo (provável esquecimento)
+const AVISO_SEGUNDOS = 4 * 3600
+
 function formatarDuracao(segundos: number): string {
-  const h = Math.floor(segundos / 3600)
-  const m = Math.floor((segundos % 3600) / 60)
-  if (h > 0) return `${h}h ${m}min`
+  const s = Math.max(0, segundos)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}min`
   return `${m}min`
+}
+
+function formatarDuracaoCurta(segundos: number): string {
+  const s = Math.max(0, segundos)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (h > 0) return `${h}h${m.toString().padStart(2, '0')}`
+  return `${m}min`
+}
+
+function formatarRelogio(segundos: number): string {
+  const s = Math.max(0, segundos)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  const mm = m.toString().padStart(2, '0')
+  const ss = sec.toString().padStart(2, '0')
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
 function calcularDuracao(inicio: string, fim: string | null): number {
@@ -26,10 +57,55 @@ function calcularDuracao(inicio: string, fim: string | null): number {
   return differenceInSeconds(fimDate, parseISO(inicio))
 }
 
+// ── Anel de progresso (SVG, sem dependências) ──────────────
+function AnelProgresso({
+  pct,
+  cor,
+  completo,
+  children,
+  size = 168,
+  stroke = 14,
+}: {
+  pct: number
+  cor: string
+  completo: boolean
+  children: React.ReactNode
+  size?: number
+  stroke?: number
+}) {
+  const r = (size - stroke) / 2
+  const c = 2 * Math.PI * r
+  const p = Math.max(0, Math.min(pct, 1))
+  const offset = c * (1 - p)
+  return (
+    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e5e7eb" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={completo ? '#16a34a' : cor}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={offset}
+          style={{ transition: 'stroke-dashoffset 0.6s ease, stroke 0.4s ease' }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export default function RegistroCliente({ profile, categorias, projetos, areas }: Props) {
   const supabase = createClient()
 
   const [registrosHoje, setRegistrosHoje] = useState<RegistroComRelacoes[]>([])
+  const [historico, setHistorico] = useState<{ inicio: string; fim: string | null }[]>([])
   const [blocoAtivo, setBlocoAtivo] = useState<RegistroComRelacoes | null>(null)
   const [cronometro, setCronometro] = useState(0)
   const [modalAberto, setModalAberto] = useState(false)
@@ -37,6 +113,8 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   const [carregando, setCarregando] = useState(false)
   const [erro, setErro] = useState('')
   const [confirmacaoFim, setConfirmacaoFim] = useState('')
+  const [celebrar, setCelebrar] = useState(false)
+  const [mostrarRegras, setMostrarRegras] = useState(false)
 
   // Form do modal
   const [formCategoria, setFormCategoria] = useState('')
@@ -46,6 +124,9 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   const [formInicio, setFormInicio] = useState('')
   const [formFim, setFormFim] = useState('')
   const [formArea, setFormArea] = useState(profile.area_id ?? '')
+
+  const cardAtivoRef = useRef<HTMLDivElement | null>(null)
+  const [cardAtivoVisivel, setCardAtivoVisivel] = useState(true)
 
   const carregarRegistros = useCallback(async () => {
     const hoje = new Date()
@@ -66,10 +147,24 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
     if (ativo) setCronometro(calcularDuracao(ativo.inicio, null))
   }, [supabase, profile.id])
 
-  useEffect(() => {
-    carregarRegistros()
-  }, [carregarRegistros])
+  const carregarHistorico = useCallback(async () => {
+    const { data } = await supabase
+      .from('registros')
+      .select('inicio, fim')
+      .eq('user_id', profile.id)
+      .order('inicio', { ascending: true })
+    setHistorico(data ?? [])
+  }, [supabase, profile.id])
 
+  const recarregar = useCallback(async () => {
+    await Promise.all([carregarRegistros(), carregarHistorico()])
+  }, [carregarRegistros, carregarHistorico])
+
+  useEffect(() => {
+    recarregar()
+  }, [recarregar])
+
+  // Cronômetro do bloco ativo
   useEffect(() => {
     if (!blocoAtivo) return
     const interval = setInterval(() => {
@@ -77,6 +172,59 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
     }, 1000)
     return () => clearInterval(interval)
   }, [blocoAtivo])
+
+  // Estatísticas de gamificação (recalcula ao vivo enquanto há bloco ativo)
+  const estatisticas = useMemo(
+    () => calcularEstatisticas(historico, profile.horas_dia_contratadas || 8, new Date()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [historico, cronometro, blocoAtivo],
+  )
+
+  // Título da aba vira cronômetro — lembra de encerrar mesmo em outra aba
+  useEffect(() => {
+    if (blocoAtivo) {
+      document.title = `⏱ ${formatarRelogio(cronometro)} · ${blocoAtivo.descricao}`
+    } else {
+      document.title = 'Pareto'
+    }
+    return () => {
+      document.title = 'Pareto'
+    }
+  }, [blocoAtivo, cronometro])
+
+  // Barra flutuante só aparece quando o card ativo sai da tela
+  useEffect(() => {
+    if (!blocoAtivo) {
+      setCardAtivoVisivel(true)
+      return
+    }
+    const el = cardAtivoRef.current
+    if (!el) return
+    const obs = new IntersectionObserver(([entry]) => setCardAtivoVisivel(entry.isIntersecting), {
+      threshold: 0.15,
+    })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [blocoAtivo])
+
+  // Celebração ao bater a meta (não dispara no primeiro carregamento)
+  const bateuRef = useRef(false)
+  const primeiraRef = useRef(true)
+  useEffect(() => {
+    if (!historico.length) return
+    if (primeiraRef.current) {
+      primeiraRef.current = false
+      bateuRef.current = estatisticas.hojeBateuMeta
+      return
+    }
+    if (estatisticas.hojeBateuMeta && !bateuRef.current) {
+      setCelebrar(true)
+      const t = setTimeout(() => setCelebrar(false), 7000)
+      bateuRef.current = true
+      return () => clearTimeout(t)
+    }
+    bateuRef.current = estatisticas.hojeBateuMeta
+  }, [estatisticas.hojeBateuMeta, historico.length])
 
   function abrirModalNovo() {
     setFormCategoria('')
@@ -133,7 +281,6 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         if (error) throw error
         setModalEditar(null)
       } else {
-        // Encerrar bloco ativo se existir
         if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
 
         const { error } = await supabase.from('registros').insert({
@@ -150,7 +297,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         setModalAberto(false)
       }
 
-      await carregarRegistros()
+      await recarregar()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro desconhecido'
       setErro(message.includes('idx_registros_ativo')
@@ -165,7 +312,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
     if (!blocoAtivo) return
     try {
       await encerrarBloco(blocoAtivo.id)
-      await carregarRegistros()
+      await recarregar()
     } catch (err: unknown) {
       setErro(err instanceof Error ? err.message : 'Erro ao encerrar atividade.')
     }
@@ -182,13 +329,8 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
     }
 
     try {
-      // Passo 1: fechar bloco ativo se existir
-      if (blocoAtivo) {
-        await encerrarBloco(blocoAtivo.id)
-      }
+      if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
 
-      // Passo 2: verificar se o último registro do dia já é o marcador de fim
-      // (deduplicação — regra 4)
       const agora = new Date()
       const inicioHoje = startOfDay(agora).toISOString()
       const fimHoje = endOfDay(agora).toISOString()
@@ -208,7 +350,6 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         ultimoRegistro?.fim !== null
 
       if (!jaTemMarcador) {
-        // Passo 3: criar marcador de fim (inicio = fim = agora, duração zero)
         const agoraIso = agora.toISOString()
         const { error } = await supabase.from('registros').insert({
           user_id: profile.id,
@@ -221,7 +362,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         if (error) throw new Error(error.message)
       }
 
-      await carregarRegistros()
+      await recarregar()
       setConfirmacaoFim(`Expediente encerrado às ${format(agora, 'HH:mm')}`)
     } catch (err: unknown) {
       setErro(err instanceof Error ? err.message : 'Erro ao encerrar expediente.')
@@ -231,7 +372,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   async function encerrarEIniciarProxima() {
     try {
       if (blocoAtivo) await encerrarBloco(blocoAtivo.id)
-      await carregarRegistros()
+      await recarregar()
       abrirModalNovo()
     } catch (err: unknown) {
       setErro(err instanceof Error ? err.message : 'Erro ao encerrar atividade.')
@@ -254,7 +395,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         inicio: new Date().toISOString(),
       })
       if (error) throw new Error(error.message)
-      await carregarRegistros()
+      await recarregar()
     } catch (err: unknown) {
       setErro(err instanceof Error ? err.message : 'Erro ao registrar atalho.')
     }
@@ -268,24 +409,40 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   }
 
   const mostrarForm = modalAberto || modalEditar !== null
+  const perfilIncompleto = !profile.cargo || !profile.sobrenome || !profile.data_nascimento
+
+  // Aviso: bloco rodando há muito tempo ou virou o dia
+  const blocoLongo = blocoAtivo
+    ? cronometro >= AVISO_SEGUNDOS ||
+      format(parseISO(blocoAtivo.inicio), 'yyyy-MM-dd') !== format(new Date(), 'yyyy-MM-dd')
+    : false
+
+  const { hojeSegundos, meta, hojeBateuMeta, hojePct, streakAtual, totalMoedas, nivel } = estatisticas
+  const primeiroNome = profile.nome.split(' ')[0]
+  const diasTrilha = ultimosDiasUteis(7, new Date())
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-gray-200 px-4 py-2.5 flex items-center justify-between">
+        <div className="flex items-center gap-2.5 min-w-0">
           <span className="text-xl font-bold text-indigo-600">Pareto</span>
-          <span className="hidden sm:inline text-sm text-gray-400">|</span>
-          <span className="hidden sm:inline text-sm text-gray-600">{profile.nome}</span>
-          {profile.areas && (
-            <span className="hidden sm:inline text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-              {(profile.areas as { nome: string }).nome}
-            </span>
-          )}
+          <button
+            onClick={() => setMostrarRegras(true)}
+            className="flex items-center gap-1.5 bg-gradient-to-r from-amber-400 to-amber-500 text-white pl-2 pr-2.5 py-1 rounded-full text-sm font-bold shadow-sm hover:from-amber-500 hover:to-amber-600 transition-colors"
+            title="Como funcionam as moedas"
+          >
+            <span className="text-base leading-none">🪙</span>
+            <span className="tabular-nums">{totalMoedas}</span>
+          </button>
+          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${nivel.corBg} ${nivel.cor}`}>
+            <span>{nivel.emoji}</span>
+            <span className="hidden sm:inline">{nivel.nome}</span>
+          </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-shrink-0">
           <Link href="/perfil" className="text-sm text-indigo-500 hover:text-indigo-700 transition-colors font-medium">
-            Meu perfil
+            Perfil
           </Link>
           <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
             Sair
@@ -293,55 +450,172 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-5">
-        {/* Nudge: perfil incompleto */}
-        {(!profile.cargo || !profile.sobrenome || !profile.data_nascimento) && (
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-amber-700 min-w-0">
-              <span className="flex-shrink-0 text-base">!</span>
-              <span className="text-sm">Complete seu perfil para que a equipe possa te conhecer melhor.</span>
+      <main className={`max-w-2xl mx-auto px-4 py-6 space-y-5 ${blocoAtivo && !cardAtivoVisivel ? 'pb-28' : ''}`}>
+        {/* Saudação + nudge */}
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Olá, {primeiroNome} 👋</h1>
+            <p className="text-sm text-gray-500 mt-0.5 capitalize">
+              {format(new Date(), "EEEE, d 'de' MMMM", { locale: ptBR })}
+            </p>
+          </div>
+        </div>
+
+        {perfilIncompleto && (
+          <Link
+            href="/perfil"
+            className="flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-2.5 hover:bg-amber-100 transition-colors"
+          >
+            <span className="text-sm text-amber-700">Complete seu perfil para a equipe te conhecer melhor.</span>
+            <span className="text-sm font-semibold text-amber-700 flex-shrink-0">Completar →</span>
+          </Link>
+        )}
+
+        {/* Card-herói: progresso do dia + gamificação */}
+        <section className="bg-white rounded-3xl border border-gray-200 p-5 sm:p-6 shadow-sm">
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <AnelProgresso pct={hojePct} cor={nivel.corRing} completo={hojeBateuMeta}>
+              {hojeBateuMeta ? (
+                <>
+                  <span className="text-3xl">🎯</span>
+                  <span className="text-xs font-semibold text-green-600 mt-0.5">Meta batida!</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-2xl font-bold text-gray-900 tabular-nums">
+                    {Math.round(hojePct * 100)}%
+                  </span>
+                  <span className="text-xs text-gray-400 mt-0.5">da meta</span>
+                </>
+              )}
+              <span className="text-xs text-gray-500 mt-1 font-medium tabular-nums">
+                {formatarDuracaoCurta(hojeSegundos)} / {formatarDuracaoCurta(meta)}
+              </span>
+            </AnelProgresso>
+
+            <div className="flex-1 w-full space-y-3">
+              <div>
+                <p className="text-sm text-gray-500">
+                  {hojeBateuMeta
+                    ? 'Você cumpriu sua meta de documentação hoje. 🎉'
+                    : `Faltam ${formatarDuracao(Math.max(0, meta - hojeSegundos))} para bater a meta de hoje.`}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="bg-orange-50 rounded-2xl px-3 py-2.5">
+                  <div className="flex items-center gap-1 text-orange-600">
+                    <span className="text-base">🔥</span>
+                    <span className="text-lg font-bold tabular-nums">{streakAtual}</span>
+                  </div>
+                  <p className="text-xs text-orange-700/70 mt-0.5">
+                    {streakAtual === 1 ? 'dia de ofensiva' : 'dias de ofensiva'}
+                  </p>
+                </div>
+                <div className="bg-amber-50 rounded-2xl px-3 py-2.5">
+                  <div className="flex items-center gap-1 text-amber-600">
+                    <span className="text-base">🪙</span>
+                    <span className="text-lg font-bold tabular-nums">
+                      {hojeBateuMeta ? `+${estatisticas.moedasHoje}` : `+${estatisticas.moedasHojePotencial}`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-700/70 mt-0.5">
+                    {hojeBateuMeta ? 'ganhas hoje' : 'ao bater a meta'}
+                  </p>
+                </div>
+              </div>
             </div>
-            <Link
-              href="/perfil"
-              className="flex-shrink-0 text-sm font-medium text-amber-700 hover:text-amber-900 underline transition-colors"
-            >
-              Completar
-            </Link>
+          </div>
+
+          {/* Trilha dos últimos 7 dias úteis */}
+          <div className="mt-5 pt-4 border-t border-gray-100">
+            <div className="flex items-center justify-between">
+              {diasTrilha.map(d => {
+                const chave = format(d, 'yyyy-MM-dd')
+                const resumo = estatisticas.mapaDias.get(chave)
+                const bateu = resumo?.bateuMeta ?? false
+                const ehHoje = chave === format(new Date(), 'yyyy-MM-dd')
+                return (
+                  <div key={chave} className="flex flex-col items-center gap-1.5">
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center text-xs ${
+                        bateu
+                          ? 'bg-green-500 text-white'
+                          : ehHoje
+                          ? 'bg-white border-2 border-dashed border-indigo-300'
+                          : 'bg-gray-100 text-gray-300'
+                      } ${ehHoje ? 'ring-2 ring-indigo-200 ring-offset-1' : ''}`}
+                    >
+                      {bateu ? '✓' : ''}
+                    </div>
+                    <span className={`text-[10px] capitalize ${ehHoje ? 'text-indigo-600 font-semibold' : 'text-gray-400'}`}>
+                      {format(d, 'EEEEEE', { locale: ptBR })}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Celebração */}
+        {celebrar && (
+          <div className="bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-2xl px-5 py-4 flex items-center justify-between shadow-md animate-pulse">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🎉</span>
+              <div>
+                <p className="font-bold">Meta do dia conquistada!</p>
+                <p className="text-sm text-green-50">+{estatisticas.moedasHoje} moedas · ofensiva de {streakAtual} {streakAtual === 1 ? 'dia' : 'dias'}</p>
+              </div>
+            </div>
+            <button onClick={() => setCelebrar(false)} className="text-green-100 hover:text-white text-xl leading-none">&times;</button>
           </div>
         )}
 
-        {/* Bloco ativo */}
+        {/* Bloco ativo OU iniciar */}
         {blocoAtivo ? (
-          <div className="bg-indigo-600 text-white rounded-2xl p-5 shadow-md">
+          <div
+            ref={cardAtivoRef}
+            className={`text-white rounded-3xl p-5 shadow-md ${
+              blocoLongo ? 'bg-gradient-to-br from-rose-500 to-red-600' : 'bg-gradient-to-br from-indigo-600 to-violet-600'
+            }`}
+          >
             <div className="flex items-start justify-between mb-3">
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                  <span className="text-xs font-medium text-indigo-200 uppercase tracking-wide">Em andamento</span>
+                  <span className="w-2 h-2 bg-green-300 rounded-full animate-pulse" />
+                  <span className="text-xs font-medium text-white/80 uppercase tracking-wide">Em andamento</span>
                 </div>
                 <p className="font-semibold text-lg leading-tight">{blocoAtivo.descricao}</p>
                 {blocoAtivo.participantes && (
-                  <p className="text-sm text-indigo-200 mt-0.5">com {blocoAtivo.participantes}</p>
+                  <p className="text-sm text-white/70 mt-0.5">com {blocoAtivo.participantes}</p>
                 )}
               </div>
               <div className="text-right ml-4 flex-shrink-0">
-                <div className="text-3xl font-mono font-bold">{formatarDuracao(cronometro)}</div>
+                <div className="text-3xl font-mono font-bold tabular-nums">{formatarRelogio(cronometro)}</div>
                 {blocoAtivo.categorias_atividade && (
-                  <span className="text-xs text-indigo-200">{blocoAtivo.categorias_atividade.nome}</span>
+                  <span className="text-xs text-white/70">{blocoAtivo.categorias_atividade.nome}</span>
                 )}
               </div>
             </div>
 
-            <div className="flex gap-2 mt-4">
+            {blocoLongo && (
+              <div className="bg-white/15 rounded-xl px-3 py-2 mb-3 text-sm flex items-center gap-2">
+                <span>⚠️</span>
+                <span>Esse bloco já roda há bastante tempo. Esqueceu de encerrar?</span>
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-1">
               <button
                 onClick={encerrarEIniciarProxima}
-                className="flex-1 bg-white text-indigo-700 py-2 px-3 rounded-xl text-sm font-medium hover:bg-indigo-50 transition-colors"
+                className="flex-1 bg-white text-indigo-700 py-2.5 px-3 rounded-xl text-sm font-semibold hover:bg-indigo-50 transition-colors"
               >
                 Encerrar e iniciar próxima
               </button>
               <button
                 onClick={encerrarAtual}
-                className="bg-indigo-500 text-white py-2 px-3 rounded-xl text-sm font-medium hover:bg-indigo-400 transition-colors"
+                className="bg-white/20 text-white py-2.5 px-4 rounded-xl text-sm font-medium hover:bg-white/30 transition-colors"
               >
                 Só encerrar
               </button>
@@ -350,39 +624,39 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
         ) : (
           <button
             onClick={abrirModalNovo}
-            className="w-full bg-indigo-600 text-white rounded-2xl p-5 text-center hover:bg-indigo-700 transition-colors shadow-sm"
+            className="w-full bg-gradient-to-br from-indigo-600 to-violet-600 text-white rounded-3xl p-6 text-center hover:from-indigo-700 hover:to-violet-700 transition-colors shadow-sm"
           >
-            <div className="text-2xl mb-1">+</div>
+            <div className="text-3xl mb-1">＋</div>
             <div className="font-semibold text-lg">Iniciar atividade</div>
-            <div className="text-sm text-indigo-200">Toque para registrar o que você está fazendo</div>
+            <div className="text-sm text-white/70">Registre o que você está fazendo agora</div>
           </button>
         )}
 
         {/* Atalhos rápidos */}
-        <div className="flex gap-2 flex-wrap">
+        <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => atalhoRapido('Chegada / início do expediente')}
-            className="flex-1 min-w-[calc(50%-0.25rem)] bg-white border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors text-center"
+            className="bg-white border border-gray-200 rounded-xl py-3 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors flex items-center justify-center gap-1.5"
           >
-            Cheguei
+            <span>☀️</span> Cheguei
           </button>
           <button
             onClick={() => atalhoRapido('Saída para almoço')}
-            className="flex-1 min-w-[calc(50%-0.25rem)] bg-white border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors text-center"
+            className="bg-white border border-gray-200 rounded-xl py-3 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors flex items-center justify-center gap-1.5"
           >
-            Almoço
+            <span>🍽️</span> Almoço
           </button>
           <button
             onClick={fimDoExpediente}
-            className="flex-1 min-w-[calc(50%-0.25rem)] bg-white border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors text-center"
+            className="bg-white border border-gray-200 rounded-xl py-3 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors flex items-center justify-center gap-1.5"
           >
-            Fim do expediente
+            <span>🌙</span> Fim do expediente
           </button>
           <button
             onClick={abrirModalNovo}
-            className="flex-1 min-w-[calc(50%-0.25rem)] bg-white border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors text-center"
+            className="bg-white border border-gray-200 rounded-xl py-3 px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-colors flex items-center justify-center gap-1.5"
           >
-            + Novo bloco
+            <span>➕</span> Novo bloco
           </button>
         </div>
 
@@ -397,13 +671,15 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
           </div>
         )}
 
+        {erro && !mostrarForm && (
+          <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{erro}</div>
+        )}
+
         {/* Linha do tempo do dia */}
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div>
-              <h2 className="font-semibold text-gray-900">
-                {format(new Date(), "EEEE, d 'de' MMMM", { locale: ptBR })}
-              </h2>
+              <h2 className="font-semibold text-gray-900">Hoje</h2>
               <p className="text-sm text-gray-500 mt-0.5">
                 {registrosHoje.length} registro{registrosHoje.length !== 1 ? 's' : ''} · {formatarDuracao(totalSegundos)} registradas
               </p>
@@ -421,7 +697,7 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
                 const cat = registro.categorias_atividade
                 return (
                   <div key={registro.id} className="px-5 py-3 hover:bg-gray-50 flex items-start gap-3 group">
-                    <div className="flex-shrink-0 mt-0.5 w-3 h-3 rounded-full mt-1.5" style={{ backgroundColor: cat?.cor ?? '#6B7280' }} />
+                    <div className="flex-shrink-0 w-3 h-3 rounded-full mt-1.5" style={{ backgroundColor: cat?.cor ?? '#6B7280' }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-900 truncate">{registro.descricao}</p>
                       <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-400">
@@ -456,6 +732,103 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
           )}
         </div>
       </main>
+
+      {/* Barra flutuante de bloco ativo (anti-esquecimento) */}
+      {blocoAtivo && !cardAtivoVisivel && !mostrarForm && (
+        <div className="fixed bottom-0 inset-x-0 z-40 p-3 pointer-events-none">
+          <div className="max-w-2xl mx-auto pointer-events-auto">
+            <div
+              className={`flex items-center gap-3 rounded-2xl shadow-lg px-4 py-3 text-white ${
+                blocoLongo ? 'bg-gradient-to-r from-rose-500 to-red-600' : 'bg-gradient-to-r from-indigo-600 to-violet-600'
+              }`}
+            >
+              <span className="w-2.5 h-2.5 bg-green-300 rounded-full animate-pulse flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate leading-tight">{blocoAtivo.descricao}</p>
+                <p className="text-xs text-white/70">{blocoLongo ? 'rodando há muito tempo' : 'em andamento'}</p>
+              </div>
+              <span className="font-mono font-bold tabular-nums text-base flex-shrink-0">{formatarRelogio(cronometro)}</span>
+              <button
+                onClick={encerrarAtual}
+                className="flex-shrink-0 bg-white text-indigo-700 px-3 py-1.5 rounded-lg text-sm font-semibold hover:bg-indigo-50 transition-colors"
+              >
+                Encerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de regras das moedas */}
+      {mostrarRegras && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) setMostrarRegras(false) }}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2"><span>🪙</span> Como ganhar moedas</h3>
+              <button onClick={() => setMostrarRegras(false)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+            </div>
+            <div className="p-5 space-y-4 text-sm text-gray-700">
+              <div className="flex gap-3">
+                <span className="text-xl flex-shrink-0">🎯</span>
+                <p>
+                  Documente pelo menos <strong>{Math.round(META_PCT * 100)}% da sua jornada</strong> ({formatarDuracao(meta)} por dia) e ganhe{' '}
+                  <strong>{MOEDAS_BASE} moedas</strong>.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <span className="text-xl flex-shrink-0">🔥</span>
+                <p>
+                  Mantenha a <strong>ofensiva</strong>: cada dia útil seguido batendo a meta dá <strong>+{MOEDAS_BONUS_DIA} moedas</strong> (até +{MOEDAS_BONUS_MAX}/dia). Fins de semana não quebram a ofensiva.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <span className="text-xl flex-shrink-0">{nivel.emoji}</span>
+                <p>
+                  Acumule moedas e suba de nível. Você está em <strong className={nivel.cor}>{nivel.nome}</strong>
+                  {estatisticas.proximoNivel
+                    ? <> — faltam <strong>{estatisticas.faltaProxNivel} moedas</strong> para {estatisticas.proximoNivel.emoji} {estatisticas.proximoNivel.nome}.</>
+                    : <> — nível máximo! 👑</>}
+                </p>
+              </div>
+
+              {estatisticas.proximoNivel && (
+                <div className="pt-1">
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all"
+                      style={{ width: `${Math.round(estatisticas.progressoNivel * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                <div className="bg-gray-50 rounded-xl px-3 py-2 text-center">
+                  <div className="text-lg font-bold text-gray-900 tabular-nums">{estatisticas.melhorStreak}</div>
+                  <div className="text-xs text-gray-500">melhor ofensiva</div>
+                </div>
+                <div className="bg-gray-50 rounded-xl px-3 py-2 text-center">
+                  <div className="text-lg font-bold text-gray-900 tabular-nums">{estatisticas.diasQualificados}</div>
+                  <div className="text-xs text-gray-500">dias com meta batida</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {NIVEIS.map(n => (
+                  <span
+                    key={n.nome}
+                    className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      n.nome === nivel.nome ? `${n.corBg} ${n.cor} ring-1 ring-current` : 'bg-gray-50 text-gray-400'
+                    }`}
+                  >
+                    {n.emoji} {n.nome}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de novo/editar registro */}
       {mostrarForm && (
