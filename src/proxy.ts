@@ -26,8 +26,9 @@ export async function proxy(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  // Rotas públicas
-  if (pathname === '/login' || pathname === '/auth/callback') {
+  // Rotas públicas — landing "/" inclusa. Deslogado vê a página; logado é levado
+  // à sua área por papel. NUNCA redirecionar deslogado em "/" para /login (loop).
+  if (pathname === '/' || pathname === '/login' || pathname === '/auth/callback') {
     if (user) {
       // Usuário já logado: redireciona para a área certa
       const { data: profile } = await supabase
