@@ -12,6 +12,19 @@ export interface Profile {
   data_nascimento: string | null   // date ISO: 'YYYY-MM-DD'
   cargo: string | null
   descricao_cargo: string | null
+  moedas: number                    // saldo — atualizado só pela função processar_pontuacao_diaria()
+  created_at: string
+}
+
+// Histórico de pontuação por dia avaliado. Preenchido exclusivamente pela
+// função processar_pontuacao_diaria(); nunca escrever no cliente.
+export interface PontuacaoDiaria {
+  id: string
+  user_id: string
+  data: string          // 'YYYY-MM-DD'
+  percentual: number    // % das horas contratadas registradas naquele dia
+  bateu_meta: boolean
+  moedas_delta: number  // moedas ganhas (+) ou perdidas (−) no dia
   created_at: string
 }
 
@@ -64,8 +77,14 @@ export type Database = {
     Tables: {
       profiles: {
         Row: Profile
-        Insert: Omit<Profile, 'created_at'>
-        Update: Partial<Omit<Profile, 'id' | 'created_at'>>
+        Insert: Omit<Profile, 'created_at' | 'moedas'>
+        // moedas é controlado pelo banco — fora do Update permitido no app.
+        Update: Partial<Omit<Profile, 'id' | 'created_at' | 'moedas'>>
+      }
+      pontuacao_diaria: {
+        Row: PontuacaoDiaria
+        Insert: never
+        Update: never
       }
       areas: {
         Row: Area

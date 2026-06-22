@@ -26,6 +26,28 @@ export const NIVEIS: Nivel[] = [
   { nome: 'Diamante', emoji: '👑', min: 1500, max: null, cor: 'text-indigo-700', corBg: 'bg-indigo-100', corRing: '#4338ca' },
 ]
 
+/**
+ * Faixa/nível a partir de um saldo de moedas autoritativo (profiles.moedas).
+ * Usar isto em vez de recalcular pontuação no cliente.
+ */
+export function nivelDe(moedas: number): {
+  nivel: Nivel
+  proximoNivel: Nivel | null
+  faltaProxNivel: number
+  progressoNivel: number
+} {
+  const total = Math.max(0, Math.round(moedas || 0))
+  const nivel =
+    NIVEIS.find(n => total >= n.min && (n.max === null || total <= n.max)) ?? NIVEIS[0]
+  const idx = NIVEIS.indexOf(nivel)
+  const proximoNivel = idx < NIVEIS.length - 1 ? NIVEIS[idx + 1] : null
+  const faltaProxNivel = proximoNivel ? proximoNivel.min - total : 0
+  const progressoNivel = proximoNivel
+    ? (total - nivel.min) / (proximoNivel.min - nivel.min)
+    : 1
+  return { nivel, proximoNivel, faltaProxNivel, progressoNivel }
+}
+
 export interface DiaResumo {
   data: string // 'yyyy-MM-dd'
   segundos: number

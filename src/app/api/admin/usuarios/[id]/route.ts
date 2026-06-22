@@ -23,7 +23,10 @@ export async function PATCH(
 
   const { id } = await params
   const body = await request.json()
-  const { nova_senha, ...profileUpdates } = body
+  // moedas/id/created_at são controlados pelo banco — nunca editáveis pela ficha,
+  // mesmo via service_role. Removidos antes de qualquer update.
+  const { nova_senha, moedas, id: _ignoraId, created_at, ...profileUpdates } = body
+  void moedas; void _ignoraId; void created_at
 
   const adminClient = createAdminClient()
 

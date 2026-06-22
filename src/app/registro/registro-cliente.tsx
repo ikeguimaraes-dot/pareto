@@ -9,6 +9,7 @@ import type { Profile, CategoriaAtividade, Projeto, Area, RegistroComRelacoes } 
 import {
   calcularEstatisticas,
   ultimosDiasUteis,
+  nivelDe,
   MOEDAS_BASE,
   MOEDAS_BONUS_DIA,
   MOEDAS_BONUS_MAX,
@@ -115,6 +116,8 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   const [confirmacaoFim, setConfirmacaoFim] = useState('')
   const [celebrar, setCelebrar] = useState(false)
   const [mostrarRegras, setMostrarRegras] = useState(false)
+  // Saldo autoritativo (profiles.moedas). Nunca recalculado no cliente.
+  const [moedasReais, setMoedasReais] = useState<number>(profile.moedas ?? 0)
 
   // Form do modal
   const [formCategoria, setFormCategoria] = useState('')
@@ -163,6 +166,24 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
   useEffect(() => {
     recarregar()
   }, [recarregar])
+
+  // Ao abrir a área do colaborador: processa a pontuação no banco (idempotente)
+  // e relê o saldo de moedas para exibir. A pontuação nunca é calculada aqui.
+  useEffect(() => {
+    let ativo = true
+    ;(async () => {
+      try {
+        await supabase.rpc('processar_pontuacao_diaria')
+      } catch {
+        // mantém o último saldo conhecido se a função falhar
+      }
+      const { data } = await supabase.from('profiles').select('moedas').eq('id', profile.id).single()
+      if (ativo && typeof data?.moedas === 'number') setMoedasReais(data.moedas)
+    })()
+    return () => {
+      ativo = false
+    }
+  }, [supabase, profile.id])
 
   // Cronômetro do bloco ativo
   useEffect(() => {
@@ -417,7 +438,10 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
       format(parseISO(blocoAtivo.inicio), 'yyyy-MM-dd') !== format(new Date(), 'yyyy-MM-dd')
     : false
 
-  const { hojeSegundos, meta, hojeBateuMeta, hojePct, streakAtual, totalMoedas, nivel } = estatisticas
+  const { hojeSegundos, meta, hojeBateuMeta, hojePct, streakAtual } = estatisticas
+  // Saldo e nível vêm do banco (moedasReais), não do cálculo local.
+  const totalMoedas = moedasReais
+  const { nivel, proximoNivel, faltaProxNivel, progressoNivel } = nivelDe(totalMoedas)
   const primeiroNome = profile.nome.split(' ')[0]
   const diasTrilha = ultimosDiasUteis(7, new Date())
 
@@ -785,18 +809,18 @@ export default function RegistroCliente({ profile, categorias, projetos, areas }
                 <span className="text-xl flex-shrink-0">{nivel.emoji}</span>
                 <p>
                   Acumule moedas e suba de nível. Você está em <strong className={nivel.cor}>{nivel.nome}</strong>
-                  {estatisticas.proximoNivel
-                    ? <> — faltam <strong>{estatisticas.faltaProxNivel} moedas</strong> para {estatisticas.proximoNivel.emoji} {estatisticas.proximoNivel.nome}.</>
+                  {proximoNivel
+                    ? <> — faltam <strong>{faltaProxNivel} moedas</strong> para {proximoNivel.emoji} {proximoNivel.nome}.</>
                     : <> — nível máximo! 👑</>}
                 </p>
               </div>
 
-              {estatisticas.proximoNivel && (
+              {proximoNivel && (
                 <div className="pt-1">
                   <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all"
-                      style={{ width: `${Math.round(estatisticas.progressoNivel * 100)}%` }}
+                      style={{ width: `${Math.round(progressoNivel * 100)}%` }}
                     />
                   </div>
                 </div>

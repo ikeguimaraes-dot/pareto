@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Profile, Area } from '@/types/database'
+import { estagioDragao } from '@/lib/dragao'
+import DragaoSVG from '@/components/dragao-svg'
 
 interface ProfileComArea extends Profile {
   areas?: { nome: string } | null
@@ -145,6 +147,7 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
                 <th className="text-left px-5 py-3 hidden sm:table-cell">E-mail</th>
                 <th className="text-left px-5 py-3 hidden lg:table-cell">Cargo</th>
                 <th className="text-left px-5 py-3 hidden md:table-cell">Área</th>
+                <th className="text-left px-5 py-3">Dragão</th>
                 <th className="text-left px-5 py-3">Papel</th>
                 <th className="text-left px-5 py-3">Status</th>
                 <th className="text-right px-5 py-3">Ações</th>
@@ -170,6 +173,22 @@ export default function UsuariosCliente({ usuarios, areas }: Props) {
                   </td>
                   <td className="px-5 py-3 hidden md:table-cell text-sm text-gray-600">
                     {u.areas ? (u.areas as { nome: string }).nome : '—'}
+                  </td>
+                  <td className="px-5 py-3">
+                    {(() => {
+                      const est = estagioDragao(u.moedas ?? 0)
+                      return (
+                        <div className="flex items-center gap-2" title={`${est.nome} · ${u.moedas ?? 0} moedas`}>
+                          <DragaoSVG estagio={est.chave} size={28} />
+                          <div className="leading-tight">
+                            <div className="text-xs font-medium text-gray-700">{est.nome}</div>
+                            <div className="text-xs text-amber-600 tabular-nums flex items-center gap-0.5">
+                              🪙 {u.moedas ?? 0}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </td>
                   <td className="px-5 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
